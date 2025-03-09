@@ -100,8 +100,7 @@ def generate_kepler_map_tab(df):
                         id={'type': 'color-attribute', 'index': 0},
                         options=[
                             {'label': 'Sale Price', 'value': 'SALESAMT'},
-                            {'label': 'Municipality', 'value': 'MUNICIPIO'},
-                            {'label': 'Property Type', 'value': 'TIPO'}
+                            {'label': 'Price per Sq Ft', 'value': 'price_per_sqft'}
                         ],
                         value='SALESAMT',
                         clearable=False
@@ -117,7 +116,7 @@ def generate_kepler_map_tab(df):
                             {'label': 'Sale Price', 'value': 'SALESAMT'},
                             {'label': 'Flat (No Height)', 'value': 'flat'}
                         ],
-                        value='flat',
+                        value='SALESAMT',
                         clearable=False
                     )
                 ], style={'marginBottom': '15px', 'width': '100%'})
@@ -150,14 +149,14 @@ def generate_kepler_map_tab(df):
                 ], style={'marginBottom': '15px'}),
                 
                 html.Div([
-                    html.Label("Heatmap Radius (for heatmap view):"),
+                    html.Label("Heatmap Intensity:"),
                     dcc.Slider(
-                        id={'type': 'heatmap-radius', 'index': 0},
-                        min=5,
-                        max=30,
-                        step=5,
-                        value=15,
-                        marks={i: str(i) for i in range(5, 31, 5)},
+                        id={'type': 'heatmap-intensity', 'index': 0},
+                        min=1,
+                        max=10,
+                        step=1,
+                        value=5,
+                        marks={i: str(i) for i in range(1, 11, 1)},
                     )
                 ], style={'marginBottom': '15px'})
             ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'})
@@ -166,12 +165,12 @@ def generate_kepler_map_tab(df):
         # Create a default map visualization
         fig = create_map_visualization(
             map_data,
-            height_attr='flat',
+            height_attr='SALESAMT',
             color_attr='SALESAMT',
             view_mode='3d',
             point_size=5,
             opacity=0.7,
-            heatmap_radius=15
+            heatmap_intensity=5
         )
         
         # Create a container for the visualization
@@ -267,21 +266,34 @@ def prepare_map_data(df):
         
         map_df = map_df[[col for col in keep_cols if col in map_df.columns]]
         
-        # Add calculated fields for better visualization
-        # Normalize sales amount for better visualization
+        # Process sales amount data
         if 'SALESAMT' in map_df.columns:
             map_df['SALESAMT'] = pd.to_numeric(map_df['SALESAMT'], errors='coerce')
-            max_sales = map_df['SALESAMT'].max()
-            if max_sales > 0:
-                map_df['salesamt_norm'] = map_df['SALESAMT'] / max_sales
-                # Fill NaN values with 0
-                map_df['salesamt_norm'] = map_df['salesamt_norm'].fillna(0)
+            # Fill NaN values with 0
+            map_df['SALESAMT'] = map_df['SALESAMT'].fillna(0)
+        
+        # Calculate price per square foot if both columns are available
+        if 'SALESAMT' in map_df.columns and 'CABIDA' in map_df.columns:
+            # Convert to numeric
+            map_df['CABIDA'] = pd.to_numeric(map_df['CABIDA'], errors='coerce')
+            # Remove zeros to avoid division by zero
+            valid_area = (map_df['CABIDA'] > 0)
+            # Calculate price per square foot (1 sq meter = 10.764 sq ft)
+            map_df['price_per_sqft'] = 0
+            map_df.loc[valid_area, 'price_per_sqft'] = map_df.loc[valid_area, 'SALESAMT'] / (map_df.loc[valid_area, 'CABIDA'] * 10.764)
+            
+            # Remove extreme outliers
+            # Use quantiles to handle any remaining oddities in the data
+            q_low = map_df['price_per_sqft'].quantile(0.01)
+            q_high = map_df['price_per_sqft'].quantile(0.99)
+            map_df.loc[(map_df['price_per_sqft'] < q_low) | (map_df['price_per_sqft'] > q_high), 'price_per_sqft'] = map_df['price_per_sqft'].median()
         
         # Remove any null values which could cause WebGL rendering issues
         map_df = map_df.fillna({
             'INSIDE_X': map_df['INSIDE_X'].mean(),
             'INSIDE_Y': map_df['INSIDE_Y'].mean(),
-            'SALESAMT': 0
+            'SALESAMT': 0,
+            'price_per_sqft': 0
         })
         
         # If dataset is too large, sample it to prevent browser performance issues
@@ -296,8 +308,8 @@ def prepare_map_data(df):
         traceback.print_exc()
         return None
 
-def create_map_visualization(map_data, height_attr='flat', color_attr='SALESAMT', 
-                            view_mode='3d', point_size=5, opacity=0.7, heatmap_radius=15):
+def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALESAMT', 
+                            view_mode='3d', point_size=5, opacity=0.7, heatmap_intensity=5):
     """
     Create visualization of property data
     
@@ -334,6 +346,9 @@ def create_map_visualization(map_data, height_attr='flat', color_attr='SALESAMT'
         if view_mode == 'heatmap':
             # Create density heatmap
             try:
+                # Adjust bins based on intensity
+                num_bins = 50 + (heatmap_intensity * 10)  # Scale from 60 to 150 bins
+                
                 fig = px.density_heatmap(
                     map_data,
                     x='INSIDE_X',
@@ -343,8 +358,12 @@ def create_map_visualization(map_data, height_attr='flat', color_attr='SALESAMT'
                         'INSIDE_X': 'Longitude',
                         'INSIDE_Y': 'Latitude'
                     },
-                    nbinsx=100,
-                    nbinsy=100,
+                    nbinsx=num_bins,
+                    nbinsy=num_bins,
+                    color_continuous_scale='Viridis',
+                    # Increase contrast with higher intensity
+                    zmin=0,
+                    zmax=None if heatmap_intensity < 5 else 10-heatmap_intensity
                 )
                 
                 # Add property points as scatter on top of heatmap for reference
@@ -387,7 +406,24 @@ def create_map_visualization(map_data, height_attr='flat', color_attr='SALESAMT'
             
         elif view_mode == '2d':
             # Create 2D scatter plot with more efficient settings
-            if color_attr in ['TIPO', 'MUNICIPIO']:
+            if color_attr == 'price_per_sqft' and 'price_per_sqft' in map_data.columns:
+                # Use a custom color scale for price per square foot
+                fig = go.Figure(data=[go.Scatter3d(
+                    x=map_data['INSIDE_X'],
+                    y=map_data['INSIDE_Y'],
+                    z=z_values,
+                    mode='markers',
+                    marker=dict(
+                        size=point_size,
+                        color=map_data['price_per_sqft'],
+                        colorscale='Turbo',  # Different colorscale to distinguish from SALESAMT
+                        opacity=opacity,
+                        line=dict(width=0),
+                        colorbar=dict(title='Price per Sq Ft ($)')
+                    ),
+                    hovertemplate=create_hover_template(map_data)
+                )])
+            elif color_attr in ['TIPO', 'MUNICIPIO']:
                 # Use categorical coloring for non-numeric values
                 fig = px.scatter(
                     map_data,
@@ -439,13 +475,28 @@ def create_map_visualization(map_data, height_attr='flat', color_attr='SALESAMT'
                 # Use a small constant for flat view but not zero (for better visibility)
                 z_values = np.ones(len(map_data)) * 0.01
                 z_title = ''
-            elif height_attr in map_data.columns and pd.api.types.is_numeric_dtype(map_data[height_attr]):
-                # Normalize height values to a reasonable range for better visualization
-                z_values = map_data[height_attr].fillna(0).values
-                # Scale to a reasonable height (max 20% of the X/Y range)
+            elif height_attr == 'SALESAMT' and 'SALESAMT' in map_data.columns:
+                # Special handling for sales amount to show price levels effectively
+                z_values = map_data['SALESAMT'].fillna(0).values
+                
+                # Scale height for better visualization 
+                # (taller buildings = higher prices, not disproportionately tall)
                 x_range = map_data['INSIDE_X'].max() - map_data['INSIDE_X'].min()
                 y_range = map_data['INSIDE_Y'].max() - map_data['INSIDE_Y'].min()
-                scale_factor = 0.2 * min(x_range, y_range) / (z_values.max() if z_values.max() > 0 else 1)
+                
+                # Use log scale for better visualization of price differences
+                # This makes high-priced properties stand out but not overwhelm
+                max_val = z_values.max() if z_values.max() > 0 else 1
+                z_values = np.log1p(z_values) * 0.15 * min(x_range, y_range) / np.log1p(max_val)
+                
+                z_title = 'Sale Price'
+            elif height_attr in map_data.columns and pd.api.types.is_numeric_dtype(map_data[height_attr]):
+                # Handle other numeric columns
+                z_values = map_data[height_attr].fillna(0).values
+                # Scale to a reasonable height
+                x_range = map_data['INSIDE_X'].max() - map_data['INSIDE_X'].min()
+                y_range = map_data['INSIDE_Y'].max() - map_data['INSIDE_Y'].min()
+                scale_factor = 0.15 * min(x_range, y_range) / (z_values.max() if z_values.max() > 0 else 1)
                 z_values = z_values * scale_factor
                 z_title = f'{height_attr}'
             else:
@@ -553,12 +604,19 @@ def create_hover_template(df):
     if 'SALESAMT' in df.columns:
         parts.append("Sale Price: $%{customdata[3]:,.2f}")
     
+    # Add price per sqft if available
+    if 'price_per_sqft' in df.columns:
+        parts.append("Price per Sq Ft: $%{customdata[4]:,.2f}")
+    
     # Add coordinates
     parts.append("<br>Longitude: %{x:.6f}")
     parts.append("Latitude: %{y:.6f}")
     
     # Add extra info
     parts.append("<extra></extra>")
+    
+    # Join parts into a single template string
+    template = "<br>".join(parts)
     
     # Build customdata array for the template
     custom_cols = []
@@ -570,6 +628,8 @@ def create_hover_template(df):
         custom_cols.append(df['MUNICIPIO'])
     if 'SALESAMT' in df.columns:
         custom_cols.append(df['SALESAMT'])
+    if 'price_per_sqft' in df.columns:
+        custom_cols.append(df['price_per_sqft'])
     
     # If we have customdata columns, add them to the figure
     if custom_cols:
@@ -578,7 +638,7 @@ def create_hover_template(df):
         # Default empty customdata
         customdata = np.zeros((len(df), 1))
     
-    return "<br>".join(parts), customdata
+    return template, customdata
 
 def create_error_figure(error_message):
     """Create a simple error figure with a message"""
@@ -641,7 +701,7 @@ def create_map_stats(map_df):
         
         html.Div([
             html.H3("Visualization Tips"),
-            html.P("For best performance in 3D view, use 'Flat' height setting"),
+            html.P("Height represents sale price - taller buildings = higher prices"),
             html.P("Adjust point size and opacity for clearer visualization"),
             html.P("Try different view modes to explore the data in different ways")
         ], style=styles['summary-card'])
@@ -662,11 +722,11 @@ def register_callbacks(app):
          Input({'type': 'view-mode', 'index': MATCH}, 'value'),
          Input({'type': 'point-size', 'index': MATCH}, 'value'),
          Input({'type': 'point-opacity', 'index': MATCH}, 'value'),
-         Input({'type': 'heatmap-radius', 'index': MATCH}, 'value')],
+         Input({'type': 'heatmap-intensity', 'index': MATCH}, 'value')],
         [State({'type': 'map-data-store', 'index': MATCH}, 'children')]
     )
     def update_visualization(height_attr, color_attr, view_mode, 
-                            point_size, opacity, heatmap_radius, map_data_json):
+                            point_size, opacity, heatmap_intensity, map_data_json):
         """Update the visualization based on user selections"""
         if not map_data_json:
             return create_error_figure("No data available for visualization")
@@ -683,7 +743,7 @@ def register_callbacks(app):
                 view_mode=view_mode,
                 point_size=point_size,
                 opacity=opacity,
-                heatmap_radius=heatmap_radius
+                heatmap_intensity=heatmap_intensity
             )
             
         except Exception as e:
