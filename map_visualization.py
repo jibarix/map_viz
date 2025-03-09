@@ -158,7 +158,6 @@ def create_viz_controls():
                     options=[
                         {'label': 'Sale Price', 'value': 'SALESAMT'},
                         {'label': 'Price per Sq Ft', 'value': 'price_per_sqft'},
-                        {'label': 'Property Type', 'value': 'TIPO'},
                         {'label': 'Municipality', 'value': 'MUNICIPIO'}
                     ],
                     value='SALESAMT',
@@ -172,8 +171,7 @@ def create_viz_controls():
                     id={'type': 'height-attribute', 'index': 0},
                     options=[
                         {'label': 'Sale Price', 'value': 'SALESAMT'},
-                        {'label': 'Price per Sq Ft', 'value': 'price_per_sqft'},
-                        {'label': 'Flat (No Height)', 'value': 'flat'}
+                        {'label': 'Price per Sq Ft', 'value': 'price_per_sqft'}
                     ],
                     value='SALESAMT',
                     clearable=False
@@ -238,9 +236,9 @@ def create_navigation_instructions():
             html.Div([
                 html.H4("Tips:"),
                 html.Ul([
-                    html.Li("For best 3D performance, use 'Flat' for height"),
                     html.Li("Toggle between view modes to see different perspectives"),
                     html.Li("Adjust point size and opacity for clearer visualization"),
+                    html.Li("In heatmap mode, adjust intensity to highlight density patterns"),
                     html.Li("Click on points to see detailed property information")
                 ])
             ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'})
@@ -305,10 +303,13 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
         if view_mode == 'heatmap':
             # Create density heatmap with intensity control
             try:
-                # Adjust bins based on intensity
-                num_bins = 50 + (heatmap_intensity * 10)  # Scale from 60 to 150 bins
+                # Dynamic bin calculation based on intensity
+                base_bins = 50
+                max_bins = 150
+                intensity_factor = heatmap_intensity / 10  # Scale 1-10 to 0.1-1.0
+                num_bins = int(base_bins + (max_bins - base_bins) * intensity_factor)
                 
-                # Create a heatmap with intensity control
+                # Create density heatmap
                 fig = px.density_heatmap(
                     map_data,
                     x='INSIDE_X',
@@ -321,12 +322,11 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                     nbinsx=num_bins,
                     nbinsy=num_bins,
                     color_continuous_scale='Viridis',
-                    # Adjust intensity - lower values make hotspots more pronounced
-                    zmin=0,
-                    zmax=None if heatmap_intensity < 5 else 10-heatmap_intensity
+                    # Higher intensity = more contrast
+                    z_range=[0, 20 - heatmap_intensity]
                 )
                 
-                # Add property points as scatter on top of heatmap for reference
+                # Add property points as scatter on top for reference
                 fig.add_trace(
                     go.Scatter(
                         x=map_data['INSIDE_X'],
@@ -365,9 +365,9 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                 return fig
             
         elif view_mode == '2d':
-            # Create 2D scatter plot with more efficient settings
-            if color_attr in ['TIPO', 'MUNICIPIO']:
-                # Use categorical coloring for non-numeric values
+            # Create 2D scatter plot
+            if color_attr == 'MUNICIPIO':
+                # Use categorical coloring
                 fig = px.scatter(
                     map_data,
                     x='INSIDE_X',
@@ -378,12 +378,15 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                         'INSIDE_X': 'Longitude',
                         'INSIDE_Y': 'Latitude'
                     },
-                    opacity=opacity,
-                    custom_data=customdata
+                    height=700
                 )
                 
-                # Update marker size 
-                fig.update_traces(marker=dict(size=point_size), hovertemplate=hovertemplate)
+                # Update marker size and opacity (done separately to ensure proper functioning)
+                fig.update_traces(
+                    marker=dict(size=point_size, opacity=opacity),
+                    hovertemplate=hovertemplate,
+                    customdata=customdata
+                )
                 
             else:
                 # Use continuous color scale for numeric values
@@ -398,13 +401,17 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                         'INSIDE_X': 'Longitude',
                         'INSIDE_Y': 'Latitude'
                     },
-                    opacity=opacity,
-                    custom_data=customdata
+                    height=700
                 )
                 
-                # Update marker size and hover template
-                fig.update_traces(marker=dict(size=point_size), hovertemplate=hovertemplate)
+                # Update marker size and opacity separately
+                fig.update_traces(
+                    marker=dict(size=point_size, opacity=opacity),
+                    hovertemplate=hovertemplate,
+                    customdata=customdata
+                )
             
+            # Make sure layout properly configured
             fig.update_layout(
                 margin=dict(l=0, r=0, b=0, t=30),
                 height=700
@@ -414,11 +421,7 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
         
         else:  # 3D View
             # Determine Z values for height
-            if height_attr == 'flat':
-                # Use a small constant for flat view but not zero (for better visibility)
-                z_values = np.ones(len(map_data)) * 0.01
-                z_title = ''
-            elif height_attr == 'price_per_sqft' and 'price_per_sqft' in map_data.columns:
+            if height_attr == 'price_per_sqft' and 'price_per_sqft' in map_data.columns:
                 # Use price per sqft for height
                 z_values = map_data['price_per_sqft'].fillna(0).values
                 
@@ -436,12 +439,10 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                 z_values = map_data['SALESAMT'].fillna(0).values
                 
                 # Scale height for better visualization 
-                # (taller buildings = higher prices, not disproportionately tall)
                 x_range = map_data['INSIDE_X'].max() - map_data['INSIDE_X'].min()
                 y_range = map_data['INSIDE_Y'].max() - map_data['INSIDE_Y'].min()
                 
-                # Use log scale for better visualization of price differences
-                # This makes high-priced properties stand out but not overwhelm
+                # Use log scale for better visualization
                 max_val = z_values.max() if z_values.max() > 0 else 1
                 z_values = np.log1p(z_values) * 0.15 * min(x_range, y_range) / np.log1p(max_val)
                 
@@ -456,12 +457,12 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                 z_values = z_values * scale_factor
                 z_title = f'{height_attr}'
             else:
-                # Default to flat if the specified column isn't suitable
-                z_values = np.ones(len(map_data)) * 0.01
+                # Default to small constant if no height attribute is valid
+                z_values = np.ones(len(map_data)) * 0.001
                 z_title = ''
             
             # Create 3D scatter with more efficient WebGL settings
-            if color_attr in ['TIPO', 'MUNICIPIO']:
+            if color_attr == 'MUNICIPIO':
                 # Use categorical coloring
                 colors = map_data[color_attr].astype('category').cat.codes
                 colorscale = px.colors.qualitative.Plotly
@@ -470,7 +471,7 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                     for i, cat in enumerate(map_data[color_attr].unique())
                 }
                 
-                # Create more efficient 3D scatter using Scatter3d
+                # Create 3D scatter using Scatter3d
                 fig = go.Figure()
                 
                 # Add a trace for each category for proper legend
@@ -523,7 +524,7 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
             fig.update_layout(
                 title='3D Property Visualization',
                 titlefont=dict(size=16),
-                showlegend=False if color_attr not in ['TIPO', 'MUNICIPIO'] else True,
+                showlegend=False if color_attr not in ['MUNICIPIO'] else True,
                 hovermode='closest',
                 margin=dict(b=20, l=5, r=5, t=40),
                 scene=dict(
@@ -532,7 +533,7 @@ def create_map_visualization(map_data, height_attr='SALESAMT', color_attr='SALES
                     yaxis=dict(title='Latitude'),
                     zaxis=dict(title=z_title, showticklabels=False),
                     camera=dict(
-                        eye=dict(x=1.5, y=-1.5, z=0.5),  # Lower z for better angle
+                        eye=dict(x=1.5, y=-1.5, z=0.5),
                         up=dict(x=0, y=0, z=1)
                     )
                 ),
