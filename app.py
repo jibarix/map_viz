@@ -58,6 +58,16 @@ except Exception as e:
         html.P("Check the console for detailed error information.")
     ], style={'padding': '20px', 'color': 'red'})
 
+# Import and register callbacks for the Kepler map tab
+try:
+    print("Loading Kepler map callbacks...")
+    from dashboard_kepler_map import register_callbacks
+    register_callbacks(app)
+    print("Kepler map callbacks registered successfully")
+except Exception as e:
+    print(f"Error registering Kepler map callbacks: {e}")
+    traceback.print_exc()
+
 # Run the server
 if __name__ == '__main__':
     try:
