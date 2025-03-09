@@ -1,0 +1,13 @@
+# Puerto Rico Property Dashboard Requirements
+dash==2.15.0
+plotly==5.19.0
+pandas>=2.0.0
+numpy>=1.24.0
+statsmodels>=0.14.0
+networkx>=3.2
+dash-deck>=0.0.1
+dash-leaflet>=1.0.0
+pydeck>=0.8.0
+geojson>=3.0.0
+# JS dependencies need to be installed separately:
+# deck.gl, mapbox-gl, @deck.gl/react, @deck.gl/layers
